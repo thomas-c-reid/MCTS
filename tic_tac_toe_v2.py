@@ -24,6 +24,7 @@ class Action:
     action: int
     player_turn: int
     tree_node_id: uuid4
+    value: int
 
 class GameState:
     """
@@ -36,25 +37,30 @@ class GameState:
         - winner: (INT) If game is in terminal state, winner will be player who gets reward value (-1, 0 or 1)
     """
     def __init__(self, observation_space: tuple):
+                
         if len(observation_space) == 2:
             self.state = observation_space[0]
             self.player_turn = observation_space[1].get('player')
             self.is_terminal = True if observation_space[1].get('winner') != 0 else False
             if self.is_terminal:
                 self.winner = observation_space[1].get('winner')
+                self.history = observation_space[1].get('history')
             else:
                 self.winner = None
+                self.history = None
         elif len(observation_space) == 5:
             self.state = observation_space[0]
             self.player_turn = observation_space[-1].get('player')
             self.is_terminal = True if observation_space[-1].get('winner') != 0 else False
             if self.is_terminal:
                 self.winner = observation_space[-1].get('winner')
+                self.history = observation_space[-1].get('history')
             else:
                 self.winner = None     
+                self.history = None
                 
     def __str__(self):
-        string = f"{'<>'*50} \n {self.state} \n {'<>'*50}"
+        string = f"{'<>'*50} \n {self.state} /n {self.is_terminal}\n {'<>'*50}"
         return string
     
 class TreeNode:
@@ -93,6 +99,20 @@ class TreeNode:
         self.total_reward += reward
         self.value = reward / self.n_visits
         
+    def get_action_mask(self):
+
+        state = self.GameState.state
+        
+        available_spaces = []
+        
+        for i in range(3):
+            for j in range(3):
+                if state[i][j] == 0:
+                    index = i * 3 + j
+                    available_spaces.append(index)
+        
+        return available_spaces
+        
 class TreeGraph:
     """
     A class to keep track of TreeNode instances and retrieve them based on their state or unique ID.
@@ -113,7 +133,7 @@ class TreeGraph:
         
     def add_node(self, node: TreeNode):
         self.nodes.append(node)
-        print(f'node added to tree: size {len(self.nodes)}')
+        print(f'Node added: {len(self.nodes)}')
         
     def find_node(self, state: np.array = None, node_id: uuid4 = None):
         """
@@ -153,18 +173,22 @@ class MCTS:
         child_mappings = []
         
         if not find_best:
-            best_action = None
             
             parent_n_visit = node.n_visits
             
-            for child_node in node.children:
+            for item in node.children:
+                
+                child_node = item['node']
+                action = item['action']
                 
                 utc_value = 0
                 
                 if child_node.n_visits == 0:
+                    child_mapping = Action(action, )
                     child_mapping = {
                         'node_id': child_node.id,
-                        'value': utc_value
+                        'value': utc_value,
+                        'action': action
                     }
                 
                 child_reward = child_node.total_reward
@@ -173,55 +197,76 @@ class MCTS:
                 
                 exploration_value = self.C * np.sqrt(np.log(parent_n_visit) / child_node.n_visits)
                 
+                utc_value = exploitation_value + exploration_value
+                
                 child_mapping = {
                     'node_id': child_node.id,
-                    'value': utc_value
+                    'value': utc_value,
+                    'action': action
                 }
                 child_mappings.append(child_mapping)
         else:
-            for child_node in node.children:
-                child_mapping = {'node_id': child_node.id, 'value': child_node.value}
+            for item in node.children:
+                child_node = item['node']
+                action = item['action']
+                child_mapping = {'node_id': child_node.id, 'value': child_node.value, 'action': action}
                 child_mappings.append(child_mapping)
-                
-        print(child_mappings)
+                        
+        # Filter for only available moves
+        child_mappings = [child_mapping for child_mapping in child_mappings if child_mapping['action'] in node.get_action_mask()]
+        
+        # Find maximum value
         best_child = max(child_mappings, key=lambda x: x['value'])
         
-        return best_child['node_id']
+        return best_child
         
-    
     def expansion(self, node: TreeNode):
-                        
+                                
         for action in range(self.env.action_space.n):
             
             env_ = deepcopy(self.env)
             tree_node = TreeNode(env_.step(action), node)
-            node.children.append(tree_node)
+            node.children.append({'node': tree_node, 'action': action})
             self.tree_graph.add_node(tree_node)
+            node.is_expanded = True
                     
     def simulation(self):
         pass
     
-    def backpropagation(self):
+    def backpropagation(self, state):
         pass
     
     def think(self, state: GameState):
-        # From the current GameState take a look at the possible actions that could be taken
-        # run the selection process until it enters either an unexplored treenode or a terminal state
-        # will output an action dataclass
         
         is_terminated = False
-        
+        actions = []
         
         while not is_terminated:
             
             # Get the TreeNode that this game represents
             node = self.tree_graph.find_node(state)
             
-            if not node.is_expanded: 
+            if not node.is_expanded:
                 self.expansion(node)
                 
-            best_action = self.selection(node)
+            best_child = self.selection(node)
             
+            print('best childie', best_child)
+            
+            best_action = best_child.get('action')
+            
+            print('action', best_action)
+                        
+            state = GameState(self.env.step(best_action))
+                                    
+            print('-'*50)
+            print(state)
+            print('-'*50)
+            
+            if state.is_terminal:
+                is_terminated = True
+        
+        self.backpropagation(state)
         
         pass
     
@@ -244,6 +289,8 @@ class TrainingEnv:
                 action = self.MCTS.think(state)
                 
                 state = self.env.step(action.action)
+                
+                print(f'New State: {state[0]}')
                 
         
 config = {
